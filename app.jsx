@@ -729,7 +729,7 @@ Object.assign(window, {
 
 // ----- app.jsx -----
 // Materiales BH — top-level app with persistence + folders + madrijim roster
-const { useState: useStateA, useEffect: useEffectA, useMemo: useMemoA } = React;
+const { useState: useStateA, useEffect: useEffectA, useMemo: useMemoA, useRef: useRefA } = React;
 
 const STORAGE_KEY = "materiales-bh-v2";
 
@@ -857,6 +857,7 @@ function App() {
   const [phase, setPhase] = useStateA("home"); // home | upload | loading | table
   const [activePeulaId, setActivePeulaId] = useStateA(null);
   const [pendingPeulaName, setPendingPeulaName] = useStateA(null);
+  const fetchPromiseRef = useRefA(null);
 
   // Persist on every change
   useEffectA(() => { saveState(state); }, [state]);
@@ -913,22 +914,63 @@ function App() {
       if (m) name = m[1].trim();
     }
     setPendingPeulaName(name);
+    fetchPromiseRef.current = fetch("/api/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text || "" }),
+    }).then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)));
     setPhase("loading");
   };
 
-  const finalizeLoading = () => {
-    // create a new peula with "parsed" rows (we reuse seedRows as the demo extraction)
+  const finalizeLoading = async () => {
+    let rawRows = null;
+    try {
+      const result = await fetchPromiseRef.current;
+      if (result && Array.isArray(result.rows)) rawRows = result.rows;
+    } catch (err) {
+      console.error("API parse error:", err);
+    }
+
     const id = "p_" + Math.random().toString(36).slice(2, 8);
     const now = new Date().toISOString();
-    const newPeula = {
-      id,
-      name: pendingPeulaName || "Peulá sin título",
-      folderId: folders[0].id,
-      createdAt: now,
-      updatedAt: now,
-      rows: seedRows().map(r => ({ ...r, id: uid() })),
-    };
-    setState(s => ({ ...s, peulot: [newPeula, ...s.peulot] }));
+
+    let rows;
+    if (rawRows) {
+      const uniqueNames = [...new Set(rawRows.map(r => r.quienNombre).filter(Boolean))];
+      const nameToId = {};
+      const newMadrijimEntries = [];
+      const currentMadrijim = state.madrijim;
+      const paletteLen = typeof MADRIJ_PALETTE !== "undefined" ? MADRIJ_PALETTE.length : 8;
+
+      uniqueNames.forEach(name => {
+        const existing = currentMadrijim.find(m => m.name.toLowerCase() === name.toLowerCase());
+        if (existing) {
+          nameToId[name] = existing.id;
+        } else {
+          const newId = "m_" + name.toLowerCase().replace(/[^a-z0-9]/g, "_") + "_" + Math.random().toString(36).slice(2, 5);
+          newMadrijimEntries.push({ id: newId, name, color: (currentMadrijim.length + newMadrijimEntries.length) % paletteLen });
+          nameToId[name] = newId;
+        }
+      });
+
+      rows = rawRows.map(r => ({
+        id: uid(),
+        momento: r.momento || "",
+        material: r.material || "",
+        cantidad: r.cantidad || "1",
+        quien: r.quienNombre ? (nameToId[r.quienNombre] || null) : null,
+        como: Array.isArray(r.como) ? r.como.filter(Boolean) : [],
+        links: Array.isArray(r.links) ? r.links.map(l => ({ url: l.url || "", label: l.label || l.url || "" })).filter(l => l.url) : [],
+        estado: "porhacer",
+      }));
+
+      const newPeula = { id, name: pendingPeulaName || "Peulá sin título", folderId: folders[0].id, createdAt: now, updatedAt: now, rows };
+      setState(s => ({ ...s, madrijim: [...s.madrijim, ...newMadrijimEntries], peulot: [newPeula, ...s.peulot] }));
+    } else {
+      // API failed — create peula with empty rows so user can add manually
+      setState(s => ({ ...s, peulot: [{ id, name: pendingPeulaName || "Peulá sin título", folderId: s.folders[0].id, createdAt: now, updatedAt: now, rows: [] }, ...s.peulot] }));
+    }
+
     setActivePeulaId(id);
     setPhase("table");
   };
