@@ -589,7 +589,20 @@ function TableScreen({ peula, onUpdate, madrijim, onAddMadrij }) {
       showToast("Tabla copiada al portapapeles");
     } catch { showToast("No se pudo copiar"); }
   };
-  const exportSheets = () => showToast("Abriendo Google Sheets...");
+  const exportSheets = async () => {
+    const nameOf = (id) => madrijim.find(m => m.id === id)?.name || "";
+    const escape = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const header = ["Momento","Material","Cantidad","Quién trae","Cómo conseguirlo","Links","Estado"].map(escape).join(",");
+    const body = rows.map(r => [
+      r.momento, r.material, r.cantidad, nameOf(r.quien),
+      r.como.join(" / "), r.links.map(l => l.url).join(" "),  ESTADO_LABELS[r.estado],
+    ].map(escape).join(",")).join("\n");
+    try {
+      await navigator.clipboard.writeText(header + "\n" + body);
+    } catch {}
+    window.open("https://sheets.new", "_blank");
+    showToast("¡CSV copiado! Pegá con Ctrl+V en la planilla nueva");
+  };
 
   const openExportFor = (madrijId) => {
     setModalMadrijId(madrijId);
